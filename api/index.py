@@ -1,7 +1,10 @@
 import json
 import os
+import re
 import sys
 import logging
+import requests as http_requests
+from html import unescape
 from http.server import BaseHTTPRequestHandler
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -30,6 +33,7 @@ HELP_TEXT = """Threads Killer Bot
 
 Queue:
 /a <text> - Add post
+/t <url> - Scrape tweet & add
 /al - List posts
 /as - Status
 /ac - Clear queue
@@ -40,11 +44,11 @@ Queue:
 /r - Resume
 
 X Cross-poster:
-/src add <username> - Monitor X profile
+/src add <username> - Monitor profile
 /src list - List sources
 /src rm <username> - Remove
 /src scan - Scan now
-/src preview <username> - See latest tweet
+/src preview <username> - See latest
 
 /h - Help"""
 
@@ -86,6 +90,40 @@ def _handle_update(update):
             return
         post_id = storage.add_post("acc1", post_text)
         send_message(chat_id, f"Added!\nID: {post_id}")
+        return
+
+    if cmd in ("/t", "/tweet", "/x"):
+        if len(args) < 1:
+            send_message(chat_id, "Usage: /t <tweet_url>")
+            return
+        url = args[0]
+        if "x.com" not in url and "twitter.com" not in url:
+            send_message(chat_id, "Not a valid X/Twitter URL.")
+            return
+        try:
+            resp = http_requests.get(
+                f"https://publish.twitter.com/oembed?url={url}",
+                timeout=10,
+            )
+            if resp.status_code != 200:
+                send_message(chat_id, "Couldn't fetch tweet. Check the link.")
+                return
+            data = resp.json()
+            html = data.get("html", "")
+            match = re.search(r'<p[^>]*>(.*?)</p>', html)
+            if match:
+                text = unescape(re.sub(r'<[^>]+>', '', match.group(1))).strip()
+            else:
+                text = unescape(re.sub(r'<[^>]+>', '', html)).strip()
+                text = re.sub(r'—.*$', '', text).strip()
+            if not text:
+                send_message(chat_id, "Couldn't extract text from tweet.")
+                return
+            post_id = storage.add_post("acc1", text)
+            send_message(chat_id, f"Scraped & added!\nID: {post_id}\n\n{text[:500]}")
+        except Exception as e:
+            logger.error(f"Tweet scrape failed: {e}")
+            send_message(chat_id, "Error scraping tweet.")
         return
 
     # --- List posts ---
