@@ -6,8 +6,8 @@
     "user_id_secret": "THREADS_USER_ID_ACC1",
     "posts_per_burst": 10,
     "seconds_between_posts_in_burst": 150,
-    "active_start_hour_utc": 8,
-    "active_end_hour_utc": 20
+   "active_start_hour_utc": 5,
+"active_end_hour_utc": 17
   },
   {
     "id": "acc2",
