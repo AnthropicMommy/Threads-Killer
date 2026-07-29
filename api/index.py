@@ -3,6 +3,7 @@ import os
 import sys
 import logging
 from http.server import BaseHTTPRequestHandler
+from urllib.parse import urlparse, parse_qs
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -13,7 +14,16 @@ from threads_api import publish_one
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "threads-killer-webhook")
+ACCOUNTS = [
+    {
+        "id": "acc1",
+        "token_env": "THREADS_ACCESS_TOKEN_ACC1",
+        "user_id_env": "THREADS_USER_ID_ACC1",
+        "posts_per_burst": 10,
+        "active_start_hour_utc": 5,
+        "active_end_hour_utc": 17,
+    },
+]
 
 
 def handle_telegram_update(update):
@@ -30,8 +40,8 @@ def handle_telegram_update(update):
     cmd = parts[0].lower()
     args = parts[1:]
 
-    responses = {
-        "/start": (
+    if cmd in ("/start", "/help"):
+        send_message(chat_id,
             "Threads Killer Bot\n\n"
             "Commands:\n"
             "/add <acc> <text> - Add post\n"
@@ -41,12 +51,7 @@ def handle_telegram_update(update):
             "/status [acc] - Show status\n"
             "/cooldown <acc|all> - Pause\n"
             "/resume <acc|all> - Resume"
-        ),
-        "/help": None,
-    }
-
-    if cmd in ("/start", "/help"):
-        send_message(chat_id, responses.get("/start") or responses["/start"])
+        )
         return
 
     if cmd == "/add":
@@ -57,8 +62,8 @@ def handle_telegram_update(update):
         if acc_id not in ACCOUNT_IDS:
             send_message(chat_id, f"Unknown: {acc_id}. Valid: {', '.join(ACCOUNT_IDS)}")
             return
-        text = " ".join(args[1:])
-        post_id = storage.add_post(acc_id, text)
+        post_text = " ".join(args[1:])
+        post_id = storage.add_post(acc_id, post_text)
         send_message(chat_id, f"Added to {acc_id}.\nID: {post_id}")
         return
 
@@ -170,27 +175,22 @@ def send_message(chat_id, text):
 
 def run_trigger():
     from datetime import datetime, timezone
-
     results = []
     for account in ACCOUNTS:
         acc_id = account["id"]
-
         if storage.is_paused(acc_id):
             results.append(f"[{acc_id}] paused, skip")
             continue
-
         now = datetime.now(timezone.utc)
         start = account.get("active_start_hour_utc", 0)
         end = account.get("active_end_hour_utc", 24)
         if not (start <= now.hour < end):
             results.append(f"[{acc_id}] outside window, skip")
             continue
-
         post = storage.get_next_post(acc_id)
         if not post:
             results.append(f"[{acc_id}] queue empty, skip")
             continue
-
         result = publish_one(acc_id, post)
         if isinstance(result, tuple) and result[0] is None:
             storage.update_post_stats(acc_id, post["id"], error=result[1])
@@ -198,23 +198,10 @@ def run_trigger():
         else:
             storage.update_post_stats(acc_id, post["id"], media_id=result)
             results.append(f"[{acc_id}] posted: {post['text'][:40]}...")
-
     return "\n".join(results) if results else "Nothing to post"
 
 
-ACCOUNTS = [
-    {
-        "id": "acc1",
-        "token_env": "THREADS_ACCESS_TOKEN_ACC1",
-        "user_id_env": "THREADS_USER_ID_ACC1",
-        "posts_per_burst": 10,
-        "active_start_hour_utc": 5,
-        "active_end_hour_utc": 17,
-    },
-]
-
-
-class Handler(BaseHTTPRequestHandler):
+class handler(BaseHTTPRequestHandler):
     def do_POST(self):
         content_length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(content_length) if content_length else b""
@@ -242,14 +229,16 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
 
     def do_GET(self):
-        if self.path == "/api/health":
+        if self.path == "/api/health" or self.path == "/health":
             self.send_response(200)
             self.send_header("Content-Type", "text/plain")
             self.end_headers()
             self.wfile.write(b"ok")
         else:
-            self.send_response(404)
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
             self.end_headers()
+            self.wfile.write(b"Threads Killer Bot - running")
 
     def log_message(self, format, *args):
         logger.info(format % args)
