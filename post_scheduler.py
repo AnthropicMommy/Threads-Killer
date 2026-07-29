@@ -1,13 +1,12 @@
 """
-Runs every 30 min via GitHub Actions, triggered on a cron. On each trigger,
-for every account that's currently inside its active posting window, this
-publishes up to `posts_per_burst` pending posts (FIFO), sleeping
-`seconds_between_posts_in_burst` between each one so they don't land in the
-same instant. With 10 posts / 150s gaps that's ~22.5 min per burst, safely
-inside the 30-min window before the next trigger.
+Runs every 30 min via GitHub Actions. For each account inside its active
+window, this publishes a burst of up to `posts_per_burst` posts, choosing
+whichever queued items have been posted least recently (round-robin). If the
+queue has fewer items than the burst size, everything in the queue goes out
+every burst — the same posts repeat all day until you add more or remove
+some.
 
-24 bursts x 10 posts across a 12h window = 240 posts/day/account, just under
-Threads' 250/24h API limit.
+24 bursts x 10 posts across a 12h window = 240 posts/day/account.
 """
 
 import json
@@ -42,7 +41,7 @@ def create_container(user_id, token, text):
 
 
 def publish_container(user_id, token, creation_id):
-    time.sleep(5)  # Threads needs a moment between container creation and publish
+    time.sleep(5)
     resp = requests.post(
         f"{GRAPH_BASE}/{user_id}/threads_publish",
         data={"creation_id": creation_id, "access_token": token},
@@ -62,9 +61,9 @@ def publish_one(account, post, token, user_id):
     try:
         creation_id = create_container(user_id, token, post["text"])
         media_id = publish_container(user_id, token, creation_id)
-        post["posted"] = True
-        post["posted_at"] = datetime.now(timezone.utc).isoformat()
-        post["media_id"] = media_id
+        post["times_posted"] = post.get("times_posted", 0) + 1
+        post["last_posted_at"] = datetime.now(timezone.utc).isoformat()
+        post["last_media_id"] = media_id
         post.pop("last_error", None)
         print(f"[{account['id']}] -> published, media id {media_id}")
     except requests.HTTPError as e:
@@ -81,28 +80,35 @@ def process_account(account):
 
     now = datetime.now(timezone.utc)
     if not in_active_window(account, now):
-        print(f"[{acc_id}] outside active window ({account.get('active_start_hour_utc',0)}-{account.get('active_end_hour_utc',24)}h UTC), skipping")
+        print(f"[{acc_id}] outside active window, skipping")
         return False
 
     token = os.environ.get(account["token_secret"])
     user_id = os.environ.get(account["user_id_secret"])
     if not token or not user_id:
-        print(f"[{acc_id}] missing secrets {account['token_secret']} / {account['user_id_secret']}", file=sys.stderr)
+        print(f"[{acc_id}] missing secrets, skipping", file=sys.stderr)
         return False
 
     queue = load_json(queue_path)
-    pending = [p for p in queue if not p.get("posted")]
-    if not pending:
+    if not queue:
         print(f"[{acc_id}] queue empty, nothing to post")
         return False
 
+    # Round-robin: least-recently-posted (or never posted) items go first.
+    def sort_key(p):
+        times = p.get("times_posted", 0)
+        last = p.get("last_posted_at")
+        last_sortable = "" if not last else last
+        return (times, last_sortable)
+
+    ordered = sorted(queue, key=sort_key)
     burst_size = account.get("posts_per_burst", 10)
     gap = account.get("seconds_between_posts_in_burst", 150)
-    batch = pending[:burst_size]
+    batch = ordered[:burst_size]
 
     for i, post in enumerate(batch):
         publish_one(account, post, token, user_id)
-        save_json(queue_path, queue)  # save after every post so partial progress isn't lost
+        save_json(queue_path, queue)
         if i < len(batch) - 1:
             time.sleep(gap)
 

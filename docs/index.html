@@ -216,38 +216,40 @@ async function ghPutFile(path, contentObj, sha, message){
 function todayStr(){ return new Date().toISOString().slice(0,10); }
 
 function renderAccountCard(account, queue){
-  const pending = queue.filter(p=>!p.posted);
-  const posted = queue.filter(p=>p.posted);
-  const postedToday = posted.filter(p=> (p.posted_at||"").slice(0,10) === todayStr());
+  // With a cycling queue, every item is always "in rotation" — there's no
+  // permanent pending/posted split. We track how many times each item has
+  // gone out today for the burst meter.
+  const today = todayStr();
+  const timesToday = p => {
+    // We don't store a full post history, just the latest times_posted/last_posted_at,
+    // so "today" count is approximate: 1 if last_posted_at is today, else 0.
+    return (p.last_posted_at || "").slice(0,10) === today ? 1 : 0;
+  };
+  const totalPostsToday = queue.reduce((sum,p)=> sum + timesToday(p), 0);
 
-  const dailyTarget = 240; // 24 bursts x 10 posts across the 12h active window
-  const burstDots = Array.from({length:24}, (_,i)=>
-    `<i class="${(i*10) < postedToday.length ? 'filled':''}"></i>`
-  ).join("");
+  const sorted = [...queue].sort((a,b)=>{
+    const at = a.last_posted_at || "";
+    const bt = b.last_posted_at || "";
+    return bt.localeCompare(at); // most recently posted first
+  });
 
-  const pendingList = pending.length ? pending.map(p => `
+  const queueList = sorted.length ? sorted.map(p => `
     <div class="item">
       <span class="txt" title="${escapeHtml(p.text)}">${escapeHtml(p.text)}</span>
+      <span class="status">${p.times_posted ? `${p.times_posted}x &middot; ${(p.last_posted_at||"").slice(5,16).replace("T"," ")}` : "not yet posted"}</span>
       <button class="del" title="Remove from queue" onclick="deletePost('${account.id}','${p.id}')">✕</button>
     </div>
   `).join("") : `<div class="empty">Queue empty — add posts below</div>`;
-
-  const recentPosted = posted.slice(-5).reverse().map(p => `
-    <div class="item posted">
-      <span class="txt">${escapeHtml(p.text)}</span>
-      <span class="status">${(p.posted_at||"").slice(5,16).replace("T"," ")}</span>
-    </div>
-  `).join("");
 
   return `
   <div class="card accent-${account.accent}">
     <div class="card-head">
       <h2>${account.label}</h2>
-      <span class="meta">${pending.length} queued</span>
+      <span class="meta">${queue.length} in rotation</span>
     </div>
     <div>
-      <div class="burst">${burstDots}</div>
-      <div class="meta" style="margin-top:6px;">${postedToday.length}/${dailyTarget} posted today &middot; ~${Math.floor(postedToday.length/10)}/24 bursts</div>
+      <div class="meta">This queue cycles — every item posts again each burst (up to ${account.postsPerBurst||10} per burst, least-recently-posted first).</div>
+      <div class="meta" style="margin-top:6px;">${totalPostsToday} posts sent today</div>
     </div>
     <div>
       <textarea id="new-${account.id}" placeholder="Write a post for ${account.label}..." oninput="updateCount('${account.id}')"></textarea>
@@ -257,12 +259,8 @@ function renderAccountCard(account, queue){
       </div>
     </div>
     <div>
-      <div class="section-label">Pending (${pending.length})</div>
-      <div class="list">${pendingList}</div>
-    </div>
-    <div>
-      <div class="section-label">Recently posted</div>
-      <div class="list">${recentPosted || '<div class="empty">Nothing posted yet</div>'}</div>
+      <div class="section-label">In rotation (${queue.length})</div>
+      <div class="list">${queueList}</div>
     </div>
   </div>`;
 }
@@ -306,7 +304,8 @@ async function addPost(accountId){
     id: crypto.randomUUID().slice(0,8),
     text,
     added_at: new Date().toISOString(),
-    posted: false,
+    times_posted: 0,
+    last_posted_at: null,
   };
   const updated = [...content, newPost];
   try{
