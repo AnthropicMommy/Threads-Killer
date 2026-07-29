@@ -227,13 +227,16 @@ def _handle_update(update):
                 send_message(chat_id, "Usage: /src preview <username>")
                 return
             username = args[1].lstrip("@")
-            send_message(chat_id, f"Fetching latest from @{username}...")
-            tweets = storage.fetch_tweets_from_x(username)
-            if not tweets:
-                send_message(chat_id, f"Couldn't fetch tweets for @{username}. Nitter might be down.")
-                return
-            latest = tweets[0]
-            send_message(chat_id, f"@{username} latest:\n\n{latest['text'][:500]}")
+            try:
+                tweets = storage.fetch_tweets_from_x(username)
+                if not tweets:
+                    send_message(chat_id, f"No recent tweets from @{username}.")
+                    return
+                latest = tweets[0]
+                send_message(chat_id, f"@{username} latest:\n\n{latest['text'][:500]}")
+            except Exception as e:
+                logger.error(f"Preview error: {e}")
+                send_message(chat_id, f"Error fetching @{username}.")
             return
 
         send_message(chat_id, "Unknown subcommand. Use: /src add|list|rm|scan|preview")
