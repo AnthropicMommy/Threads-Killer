@@ -1,0 +1,350 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Threads Queue Control</title>
+<style>
+  :root{
+    --bg:#14161b;
+    --panel:#1b1e25;
+    --panel-2:#22252e;
+    --line:#2c303a;
+    --text:#e9eaee;
+    --muted:#8b90a0;
+    --amber:#e8a23d;
+    --teal:#4fb6a6;
+    --violet:#9084e0;
+    --danger:#e05a5a;
+    --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif;
+    --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font-family:var(--font-ui); min-height:100vh;
+  }
+  header{
+    padding:28px 24px 18px; border-bottom:1px solid var(--line);
+    display:flex; justify-content:space-between; align-items:baseline; flex-wrap:wrap; gap:12px;
+  }
+  header h1{
+    font-size:20px; margin:0; letter-spacing:0.02em; font-weight:600;
+  }
+  header h1 .dot{ color:var(--amber); }
+  #setup-toggle{
+    background:none; border:1px solid var(--line); color:var(--muted);
+    padding:6px 12px; border-radius:6px; font-size:12px; cursor:pointer; font-family:var(--font-mono);
+  }
+  #setup-toggle:hover{ border-color:var(--muted); color:var(--text); }
+
+  #setup{
+    max-width:520px; margin:20px auto; background:var(--panel); border:1px solid var(--line);
+    border-radius:10px; padding:20px 22px; display:none;
+  }
+  #setup.open{ display:block; }
+  #setup label{ display:block; font-size:12px; color:var(--muted); margin:12px 0 4px; }
+  #setup input{
+    width:100%; background:var(--panel-2); border:1px solid var(--line); color:var(--text);
+    padding:9px 10px; border-radius:6px; font-family:var(--font-mono); font-size:13px;
+  }
+  #setup button{
+    margin-top:16px; background:var(--amber); color:#1a1300; border:none; padding:9px 16px;
+    border-radius:6px; font-weight:600; cursor:pointer; font-size:13px;
+  }
+  #setup .hint{ font-size:11px; color:var(--muted); margin-top:10px; line-height:1.5; }
+
+  main{
+    max-width:1100px; margin:0 auto; padding:24px;
+    display:grid; grid-template-columns:repeat(auto-fit, minmax(320px,1fr)); gap:18px;
+  }
+  .card{
+    background:var(--panel); border:1px solid var(--line); border-radius:10px;
+    padding:18px; display:flex; flex-direction:column; gap:14px;
+  }
+  .card-head{ display:flex; justify-content:space-between; align-items:center; }
+  .card-head h2{ margin:0; font-size:15px; font-weight:600; }
+  .accent-acc1 h2{ color:var(--amber); }
+  .accent-acc2 h2{ color:var(--teal); }
+  .accent-acc3 h2{ color:var(--violet); }
+
+  .burst{
+    display:flex; gap:3px; flex-wrap:wrap;
+  }
+  .burst i{
+    width:9px; height:7px; border-radius:2px; background:var(--panel-2); border:1px solid var(--line);
+    display:block;
+  }
+  .accent-acc1 .burst i.filled{ background:var(--amber); border-color:var(--amber); }
+  .accent-acc2 .burst i.filled{ background:var(--teal); border-color:var(--teal); }
+  .accent-acc3 .burst i.filled{ background:var(--violet); border-color:var(--violet); }
+
+  .meta{ font-size:12px; color:var(--muted); font-family:var(--font-mono); }
+
+  textarea{
+    width:100%; min-height:72px; resize:vertical; background:var(--panel-2); border:1px solid var(--line);
+    color:var(--text); border-radius:6px; padding:10px; font-family:var(--font-ui); font-size:13.5px; line-height:1.4;
+  }
+  .row{ display:flex; gap:8px; align-items:center; }
+  .addbtn{
+    background:var(--panel-2); border:1px solid var(--line); color:var(--text); padding:8px 14px;
+    border-radius:6px; cursor:pointer; font-size:13px; font-weight:600;
+  }
+  .accent-acc1 .addbtn:hover{ border-color:var(--amber); color:var(--amber); }
+  .accent-acc2 .addbtn:hover{ border-color:var(--teal); color:var(--teal); }
+  .accent-acc3 .addbtn:hover{ border-color:var(--violet); color:var(--violet); }
+  .charcount{ font-size:11px; color:var(--muted); font-family:var(--font-mono); margin-left:auto; }
+
+  .list{ display:flex; flex-direction:column; gap:6px; max-height:220px; overflow-y:auto; }
+  .item{
+    display:flex; justify-content:space-between; gap:8px; background:var(--panel-2);
+    border:1px solid var(--line); border-radius:6px; padding:8px 10px; font-size:12.5px;
+  }
+  .item .txt{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .item .del{ color:var(--danger); cursor:pointer; background:none; border:none; font-size:14px; flex-shrink:0; }
+  .item.posted{ opacity:0.55; }
+  .item .status{ font-family:var(--font-mono); font-size:10px; color:var(--muted); flex-shrink:0; }
+  .empty{ font-size:12px; color:var(--muted); font-style:italic; padding:8px 0; }
+  .section-label{ font-size:11px; text-transform:uppercase; letter-spacing:0.06em; color:var(--muted); margin:2px 0 -4px; }
+  .toast{
+    position:fixed; bottom:20px; left:50%; transform:translateX(-50%); background:var(--panel-2);
+    border:1px solid var(--line); padding:10px 18px; border-radius:8px; font-size:13px; opacity:0;
+    transition:opacity 0.2s; pointer-events:none;
+  }
+  .toast.show{ opacity:1; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Threads Queue<span class="dot">·</span>Control</h1>
+  <button id="setup-toggle" onclick="document.getElementById('setup').classList.toggle('open')">connection settings</button>
+</header>
+
+<div id="setup">
+  <label>GitHub repo owner</label>
+  <input id="cfg-owner" placeholder="e.g. yourusername">
+  <label>Repo name</label>
+  <input id="cfg-repo" placeholder="e.g. threads-dashboard">
+  <label>Branch</label>
+  <input id="cfg-branch" placeholder="main" value="main">
+  <label>Personal access token (repo contents read/write, kept only in this browser)</label>
+  <input id="cfg-token" type="password" placeholder="ghp_...">
+  <button onclick="saveConfig()">Save & connect</button>
+  <div class="hint">
+    Fine-grained PAT scoped to just this repo, with Contents: Read and write, is safest.
+    Create one at github.com/settings/personal-access-tokens. This token is stored only
+    in this browser's localStorage — never sent anywhere but api.github.com.
+  </div>
+</div>
+
+<main id="main"></main>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const ACCOUNTS = [
+  { id:"acc1", label:"Account 1", accent:"acc1" },
+  { id:"acc2", label:"Account 2", accent:"acc2" },
+  { id:"acc3", label:"Account 3", accent:"acc3" },
+];
+
+function cfg(){
+  return {
+    owner: localStorage.getItem("tq_owner") || "",
+    repo: localStorage.getItem("tq_repo") || "",
+    branch: localStorage.getItem("tq_branch") || "main",
+    token: localStorage.getItem("tq_token") || "",
+  };
+}
+
+function saveConfig(){
+  localStorage.setItem("tq_owner", document.getElementById("cfg-owner").value.trim());
+  localStorage.setItem("tq_repo", document.getElementById("cfg-repo").value.trim());
+  localStorage.setItem("tq_branch", document.getElementById("cfg-branch").value.trim() || "main");
+  localStorage.setItem("tq_token", document.getElementById("cfg-token").value.trim());
+  document.getElementById("setup").classList.remove("open");
+  renderAll();
+}
+
+function loadConfigIntoForm(){
+  const c = cfg();
+  document.getElementById("cfg-owner").value = c.owner;
+  document.getElementById("cfg-repo").value = c.repo;
+  document.getElementById("cfg-branch").value = c.branch;
+  document.getElementById("cfg-token").value = c.token;
+  if(!c.owner || !c.repo || !c.token){
+    document.getElementById("setup").classList.add("open");
+  }
+}
+
+function showToast(msg){
+  const t = document.getElementById("toast");
+  t.textContent = msg;
+  t.classList.add("show");
+  setTimeout(()=>t.classList.remove("show"), 2200);
+}
+
+async function ghGetFile(path){
+  const c = cfg();
+  const res = await fetch(`https://api.github.com/repos/${c.owner}/${c.repo}/contents/${path}?ref=${c.branch}`, {
+    headers: { Authorization: `token ${c.token}`, Accept: "application/vnd.github+json" }
+  });
+  if(!res.ok) throw new Error(`GET ${path} failed: ${res.status}`);
+  const data = await res.json();
+  const content = JSON.parse(decodeURIComponent(escape(atob(data.content))));
+  return { content, sha: data.sha };
+}
+
+async function ghPutFile(path, contentObj, sha, message){
+  const c = cfg();
+  const body = {
+    message,
+    content: btoa(unescape(encodeURIComponent(JSON.stringify(contentObj, null, 2)))),
+    sha,
+    branch: c.branch,
+  };
+  const res = await fetch(`https://api.github.com/repos/${c.owner}/${c.repo}/contents/${path}`, {
+    method: "PUT",
+    headers: { Authorization: `token ${c.token}`, Accept: "application/vnd.github+json" },
+    body: JSON.stringify(body),
+  });
+  if(!res.ok) throw new Error(`PUT ${path} failed: ${res.status}`);
+  return res.json();
+}
+
+function todayStr(){ return new Date().toISOString().slice(0,10); }
+
+function renderAccountCard(account, queue){
+  const pending = queue.filter(p=>!p.posted);
+  const posted = queue.filter(p=>p.posted);
+  const postedToday = posted.filter(p=> (p.posted_at||"").slice(0,10) === todayStr());
+
+  const dailyTarget = 240; // 24 bursts x 10 posts across the 12h active window
+  const burstDots = Array.from({length:24}, (_,i)=>
+    `<i class="${(i*10) < postedToday.length ? 'filled':''}"></i>`
+  ).join("");
+
+  const pendingList = pending.length ? pending.map(p => `
+    <div class="item">
+      <span class="txt" title="${escapeHtml(p.text)}">${escapeHtml(p.text)}</span>
+      <button class="del" title="Remove from queue" onclick="deletePost('${account.id}','${p.id}')">✕</button>
+    </div>
+  `).join("") : `<div class="empty">Queue empty — add posts below</div>`;
+
+  const recentPosted = posted.slice(-5).reverse().map(p => `
+    <div class="item posted">
+      <span class="txt">${escapeHtml(p.text)}</span>
+      <span class="status">${(p.posted_at||"").slice(5,16).replace("T"," ")}</span>
+    </div>
+  `).join("");
+
+  return `
+  <div class="card accent-${account.accent}">
+    <div class="card-head">
+      <h2>${account.label}</h2>
+      <span class="meta">${pending.length} queued</span>
+    </div>
+    <div>
+      <div class="burst">${burstDots}</div>
+      <div class="meta" style="margin-top:6px;">${postedToday.length}/${dailyTarget} posted today &middot; ~${Math.floor(postedToday.length/10)}/24 bursts</div>
+    </div>
+    <div>
+      <textarea id="new-${account.id}" placeholder="Write a post for ${account.label}..." oninput="updateCount('${account.id}')"></textarea>
+      <div class="row" style="margin-top:6px;">
+        <button class="addbtn" onclick="addPost('${account.id}')">Add to queue</button>
+        <span class="charcount" id="count-${account.id}">0 / 500</span>
+      </div>
+    </div>
+    <div>
+      <div class="section-label">Pending (${pending.length})</div>
+      <div class="list">${pendingList}</div>
+    </div>
+    <div>
+      <div class="section-label">Recently posted</div>
+      <div class="list">${recentPosted || '<div class="empty">Nothing posted yet</div>'}</div>
+    </div>
+  </div>`;
+}
+
+function escapeHtml(s){
+  return (s||"").replace(/[&<>"']/g, m => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m]));
+}
+
+function updateCount(id){
+  const el = document.getElementById(`new-${id}`);
+  document.getElementById(`count-${id}`).textContent = `${el.value.length} / 500`;
+}
+
+let queueCache = {};
+
+async function renderAll(){
+  const c = cfg();
+  const main = document.getElementById("main");
+  if(!c.owner || !c.repo || !c.token){
+    main.innerHTML = `<div class="empty" style="padding:40px; text-align:center; grid-column:1/-1;">Set your GitHub connection above to load queues.</div>`;
+    return;
+  }
+  main.innerHTML = `<div class="empty" style="padding:40px; text-align:center; grid-column:1/-1;">Loading queues...</div>`;
+  try{
+    for(const account of ACCOUNTS){
+      const { content, sha } = await ghGetFile(`queues/${account.id}.json`);
+      queueCache[account.id] = { content, sha };
+    }
+    main.innerHTML = ACCOUNTS.map(a => renderAccountCard(a, queueCache[a.id].content)).join("");
+  }catch(err){
+    main.innerHTML = `<div class="empty" style="padding:40px; text-align:center; grid-column:1/-1; color:var(--danger);">Couldn't load queues: ${err.message}<br>Check your repo/token in connection settings.</div>`;
+  }
+}
+
+async function addPost(accountId){
+  const el = document.getElementById(`new-${accountId}`);
+  const text = el.value.trim();
+  if(!text) return;
+  const { content, sha } = queueCache[accountId];
+  const newPost = {
+    id: crypto.randomUUID().slice(0,8),
+    text,
+    added_at: new Date().toISOString(),
+    posted: false,
+  };
+  const updated = [...content, newPost];
+  try{
+    const result = await ghPutFile(`queues/${accountId}.json`, updated, sha, `Add post to ${accountId} queue`);
+    queueCache[accountId] = { content: updated, sha: result.content.sha };
+    el.value = "";
+    renderAccountInPlace(accountId);
+    showToast("Added to queue");
+  }catch(err){
+    showToast("Failed to add — " + err.message);
+  }
+}
+
+async function deletePost(accountId, postId){
+  const { content, sha } = queueCache[accountId];
+  const updated = content.filter(p => p.id !== postId);
+  try{
+    const result = await ghPutFile(`queues/${accountId}.json`, updated, sha, `Remove post from ${accountId} queue`);
+    queueCache[accountId] = { content: updated, sha: result.content.sha };
+    renderAccountInPlace(accountId);
+    showToast("Removed from queue");
+  }catch(err){
+    showToast("Failed to remove — " + err.message);
+  }
+}
+
+function renderAccountInPlace(accountId){
+  const account = ACCOUNTS.find(a=>a.id===accountId);
+  const idx = ACCOUNTS.indexOf(account);
+  const main = document.getElementById("main");
+  const cards = main.querySelectorAll(".card");
+  if(cards[idx]){
+    cards[idx].outerHTML = renderAccountCard(account, queueCache[accountId].content);
+  }
+}
+
+loadConfigIntoForm();
+renderAll();
+</script>
+</body>
+</html>

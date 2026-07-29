@@ -1,0 +1,33 @@
+name: Refresh Threads Tokens
+
+on:
+  schedule:
+    - cron: "0 3 * * 1"
+  workflow_dispatch: {}
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install requests
+
+      - name: Refresh all tokens
+        id: refresh
+        env:
+          THREADS_ACCESS_TOKEN_ACC1: ${{ secrets.THREADS_ACCESS_TOKEN_ACC1 }}
+          THREADS_ACCESS_TOKEN_ACC2: ${{ secrets.THREADS_ACCESS_TOKEN_ACC2 }}
+          THREADS_ACCESS_TOKEN_ACC3: ${{ secrets.THREADS_ACCESS_TOKEN_ACC3 }}
+        run: python refresh_tokens.py > refreshed.txt
+
+      - name: Update repo secrets
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          while IFS='=' read -r name value; do
+            echo "::add-mask::$value"
+            gh secret set "$name" --body "$value" --repo "${{ github.repository }}"
+          done < refreshed.txt

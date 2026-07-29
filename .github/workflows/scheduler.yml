@@ -1,0 +1,44 @@
+name: Threads Scheduler (multi-account)
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: threads-scheduler
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 28
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install requests
+
+      - name: Publish due posts for all accounts
+        env:
+          THREADS_ACCESS_TOKEN_ACC1: ${{ secrets.THREADS_ACCESS_TOKEN_ACC1 }}
+          THREADS_USER_ID_ACC1: ${{ secrets.THREADS_USER_ID_ACC1 }}
+          THREADS_ACCESS_TOKEN_ACC2: ${{ secrets.THREADS_ACCESS_TOKEN_ACC2 }}
+          THREADS_USER_ID_ACC2: ${{ secrets.THREADS_USER_ID_ACC2 }}
+          THREADS_ACCESS_TOKEN_ACC3: ${{ secrets.THREADS_ACCESS_TOKEN_ACC3 }}
+          THREADS_USER_ID_ACC3: ${{ secrets.THREADS_USER_ID_ACC3 }}
+        run: python post_scheduler.py
+
+      - name: Commit updated queues
+        run: |
+          git config user.name "threads-scheduler-bot"
+          git config user.email "actions@github.com"
+          git add queues/*.json
+          git diff --cached --quiet || git commit -m "Update queue state [skip ci]"
+          git push
