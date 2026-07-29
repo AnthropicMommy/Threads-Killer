@@ -2,21 +2,15 @@ import os
 import re
 import uuid
 import logging
-import feedparser
+import json
 import psycopg2
 import requests
 from datetime import datetime, timezone, timedelta
+from html import unescape
 
 logger = logging.getLogger(__name__)
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
-
-NITTER_INSTANCES = [
-    "https://nitter.privacydev.net",
-    "https://nitter.poast.org",
-    "https://nitter.cz",
-    "https://nitter.woodland.cafe",
-]
 
 _conn = None
 
@@ -192,7 +186,7 @@ def set_cooldown_all(paused):
 # --- X Source management ---
 
 def add_source(username):
-    username = username.lstrip("@").strip()
+    username = username.lstrip("@").strip().split("/")[-1]
     source_id = uuid.uuid4().hex[:8]
     now = datetime.now(timezone.utc).isoformat()
     try:
@@ -257,70 +251,80 @@ def mark_tweet_posted(tweet_id, username):
 
 # --- X Scraper ---
 
-def _clean_tweet_text(text):
-    text = re.sub(r'<[^>]+>', '', text)
-    text = re.sub(r'&amp;', '&', text)
-    text = re.sub(r'&lt;', '<', text)
-    text = re.sub(r'&gt;', '>', text)
-    text = re.sub(r'&#\d+;', '', text)
-    text = re.sub(r'\n{3,}', '\n\n', text)
-    return text.strip()
+def _get_guest_token():
+    try:
+        resp = requests.post(
+            "https://api.twitter.com/1.1/guest/activate.json",
+            headers={"Authorization": "Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        return resp.json().get("guest_token")
+    except Exception as e:
+        logger.error(f"Guest token failed: {e}")
+        return None
 
 
 def fetch_tweets_from_x(username):
-    for instance in NITTER_INSTANCES:
-        url = f"{instance}/{username}/rss"
-        try:
-            resp = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
-            if resp.status_code != 200:
-                continue
-            feed = feedparser.parse(resp.text)
-            if not feed.entries:
-                continue
-            tweets = []
-            one_hour_ago = datetime.now(timezone.utc) - timedelta(hours=1)
-            for entry in feed.entries:
-                tweet_id = entry.get("id", "").split("/")[-1] if entry.get("id") else entry.get("link", "").split("/")[-1]
-                if not tweet_id:
-                    tweet_id = entry.get("link", "").split("/")[-1]
-                published = entry.get("published_parsed")
-                if published:
-                    pub_dt = datetime(*published[:6], tzinfo=timezone.utc)
-                    if pub_dt < one_hour_ago:
+    guest_token = _get_guest_token()
+    if not guest_token:
+        return []
+
+    try:
+        resp = requests.get(
+            f"https://api.twitter.com/1.1/statuses/user_timeline.json?screen_name={username}&count=5&tweet_mode=extended",
+            headers={
+                "Authorization": "Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA",
+                "x-guest-token": guest_token,
+            },
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            logger.warning(f"X API returned {resp.status_code} for @{username}")
+            return []
+        tweets = resp.json()
+        one_hour_ago = datetime.now(timezone.utc) - timedelta(hours=1)
+        results = []
+        for tweet in tweets:
+            tweet_id = tweet.get("id_str", "")
+            created = tweet.get("created_at", "")
+            if created:
+                try:
+                    pub_dt = datetime.strptime(created, "%a %b %d %H:%M:%S %z %Z")
+                    if pub_dt.replace(tzinfo=timezone.utc) < one_hour_ago:
                         continue
-                text = _clean_tweet_text(entry.get("title", "") or entry.get("summary", ""))
-                if text and not was_tweet_posted(tweet_id):
-                    tweets.append({
-                        "id": tweet_id,
-                        "username": username,
-                        "text": text,
-                        "link": entry.get("link", ""),
-                    })
-            if tweets:
-                return tweets
-        except Exception as e:
-            logger.warning(f"Nitter {instance} failed for {username}: {e}")
-            continue
-    return []
+                except Exception:
+                    pass
+            text = tweet.get("full_text", tweet.get("text", ""))
+            text = re.sub(r'https?://\S+', '', text).strip()
+            if text and not was_tweet_posted(tweet_id):
+                results.append({
+                    "id": tweet_id,
+                    "username": username,
+                    "text": text,
+                })
+        return results
+    except Exception as e:
+        logger.error(f"X API fetch failed for @{username}: {e}")
+        return []
 
 
 def scan_and_queue(account_id="acc1"):
     sources = get_sources()
     if not sources:
-        return "No X sources configured."
+        return "No X sources."
 
     results = []
     total_new = 0
     for username in sources:
         tweets = fetch_tweets_from_x(username)
         for tweet in tweets:
-            post_id = add_post(account_id, tweet["text"])
+            add_post(account_id, tweet["text"])
             mark_tweet_posted(tweet["id"], username)
             total_new += 1
         if tweets:
             results.append(f"@{username}: {len(tweets)} new")
         else:
-            results.append(f"@{username}: no new posts")
+            results.append(f"@{username}: none")
 
-    summary = f"Found {total_new} new posts.\n" + "\n".join(results)
-    return summary
+    return f"Found {total_new} new.\n" + "\n".join(results)

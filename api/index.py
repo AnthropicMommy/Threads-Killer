@@ -42,8 +42,9 @@ Queue:
 X Cross-poster:
 /src add <username> - Monitor X profile
 /src list - List sources
-/src rm <username> - Remove source
+/src rm <username> - Remove
 /src scan - Scan now
+/src preview <username> - See latest tweet
 
 /h - Help"""
 
