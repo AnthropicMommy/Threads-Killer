@@ -100,30 +100,47 @@ def _handle_update(update):
         if "x.com" not in url and "twitter.com" not in url:
             send_message(chat_id, "Not a valid X/Twitter URL.")
             return
-        try:
-            resp = http_requests.get(
-                f"https://publish.twitter.com/oembed?url={url}",
-                timeout=10,
-            )
-            if resp.status_code != 200:
-                send_message(chat_id, "Couldn't fetch tweet. Check the link.")
-                return
-            data = resp.json()
-            html = data.get("html", "")
-            match = re.search(r'<p[^>]*>(.*?)</p>', html)
-            if match:
-                text = unescape(re.sub(r'<[^>]+>', '', match.group(1))).strip()
-            else:
-                text = unescape(re.sub(r'<[^>]+>', '', html)).strip()
-                text = re.sub(r'—.*$', '', text).strip()
-            if not text:
-                send_message(chat_id, "Couldn't extract text from tweet.")
-                return
-            post_id = storage.add_post("acc1", text)
-            send_message(chat_id, f"Scraped & added!\nID: {post_id}\n\n{text[:500]}")
-        except Exception as e:
-            logger.error(f"Tweet scrape failed: {e}")
-            send_message(chat_id, "Error scraping tweet.")
+
+        if "/status/" in url:
+            try:
+                resp = http_requests.get(
+                    f"https://publish.twitter.com/oembed?url={url}",
+                    timeout=10,
+                )
+                if resp.status_code != 200:
+                    send_message(chat_id, "Couldn't fetch tweet. Check the link.")
+                    return
+                data = resp.json()
+                html = data.get("html", "")
+                match = re.search(r'<p[^>]*>(.*?)</p>', html)
+                if match:
+                    text = unescape(re.sub(r'<[^>]+>', '', match.group(1))).strip()
+                else:
+                    text = unescape(re.sub(r'<[^>]+>', '', html)).strip()
+                    text = re.sub(r'—.*$', '', text).strip()
+                if not text:
+                    send_message(chat_id, "Couldn't extract text from tweet.")
+                    return
+                post_id = storage.add_post("acc1", text)
+                send_message(chat_id, f"Scraped & added!\nID: {post_id}\n\n{text[:500]}")
+            except Exception as e:
+                logger.error(f"Tweet scrape failed: {e}")
+                send_message(chat_id, "Error scraping tweet.")
+        else:
+            username = url.rstrip("/").split("/")[-1].lstrip("@")
+            send_message(chat_id, f"Fetching latest from @{username}...")
+            try:
+                tweets = storage.fetch_tweets_from_x(username)
+                if not tweets:
+                    send_message(chat_id, f"No recent tweets from @{username}.")
+                    return
+                latest = tweets[0]
+                post_id = storage.add_post("acc1", latest["text"])
+                storage.mark_tweet_posted(latest["id"], username)
+                send_message(chat_id, f"Scraped & added!\nID: {post_id}\n\n{latest['text'][:500]}")
+            except Exception as e:
+                logger.error(f"Profile scrape failed: {e}")
+                send_message(chat_id, "Error fetching profile.")
         return
 
     # --- List posts ---
