@@ -1,23 +1,26 @@
 """
-Refreshes each account's long-lived token weekly. Prints results as
-ACC_ID=NEW_TOKEN lines; the workflow parses these and updates the
-corresponding repo secrets via `gh secret set`.
+Refreshes each account's long-lived token.
+Run manually: python refresh_tokens.py
+Or add a /refresh command to the Telegram bot.
 """
 
-import json
 import os
 import requests
 
-accounts = json.load(open("accounts.json"))
+from config import ACCOUNTS
 
-for account in accounts:
-    token = os.environ.get(account["token_secret"])
+for account in ACCOUNTS:
+    token = os.environ.get(account["token_env"])
     if not token:
+        print(f"[{account['id']}] no token found, skipping")
         continue
-    resp = requests.get(
-        "https://graph.threads.net/refresh_access_token",
-        params={"grant_type": "th_refresh_token", "access_token": token},
-    )
-    resp.raise_for_status()
-    new_token = resp.json()["access_token"]
-    print(f"{account['token_secret']}={new_token}")
+    try:
+        resp = requests.get(
+            "https://graph.threads.net/refresh_access_token",
+            params={"grant_type": "th_refresh_token", "access_token": token},
+        )
+        resp.raise_for_status()
+        new_token = resp.json()["access_token"]
+        print(f"[{account['id']}] NEW_TOKEN={new_token}")
+    except requests.HTTPError as e:
+        print(f"[{account['id']}] FAILED: {e.response.text}")
