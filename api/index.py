@@ -28,20 +28,16 @@ ACCOUNTS = [
 HELP_TEXT = """Threads Killer Bot
 
 Quick commands:
-/a <text> - Add post to queue
-/al - List all posts
-/as - Show status
+/a <text> - Add post
+/al - List posts
+/as - Status
 /ac - Clear queue
 /ar <id> - Remove post
 /ae <id> <new text> - Edit post
-/p - Pause posting
-/r - Resume posting
-/h - This help
-
-Examples:
-/a Hello world this is my post
-/ar 7f638bd2
-/ae 7f638bd2 Updated text here"""
+/go - Post now
+/p - Pause
+/r - Resume
+/h - Help"""
 
 
 def handle_telegram_update(update):
@@ -134,6 +130,25 @@ def handle_telegram_update(update):
     if cmd in ("/r", "/resume"):
         storage.set_cooldown("acc1", False)
         send_message(chat_id, "Posting resumed.")
+        return
+
+    if cmd in ("/go", "/post", "/now"):
+        posts = storage.get_queue("acc1")
+        if not posts:
+            send_message(chat_id, "Queue empty.")
+            return
+        post = storage.get_next_post("acc1")
+        if not post:
+            send_message(chat_id, "Nothing to post.")
+            return
+        send_message(chat_id, f"Posting: {post['text'][:50]}...")
+        result = publish_one("acc1", post)
+        if isinstance(result, tuple) and result[0] is None:
+            storage.update_post_stats("acc1", post["id"], error=result[1])
+            send_message(chat_id, f"FAILED: {result[1][:200]}")
+        else:
+            storage.update_post_stats("acc1", post["id"], media_id=result)
+            send_message(chat_id, f"Posted! ID: {post['id']}")
         return
 
     send_message(chat_id, "Unknown command. Send /h for help.")
