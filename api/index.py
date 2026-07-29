@@ -221,7 +221,21 @@ def _handle_update(update):
             send_message(chat_id, result)
             return
 
-        send_message(chat_id, "Unknown subcommand. Use: /src add|list|rm|scan")
+        if sub == "preview":
+            if len(args) < 2:
+                send_message(chat_id, "Usage: /src preview <username>")
+                return
+            username = args[1].lstrip("@")
+            send_message(chat_id, f"Fetching latest from @{username}...")
+            tweets = storage.fetch_tweets_from_x(username)
+            if not tweets:
+                send_message(chat_id, f"Couldn't fetch tweets for @{username}. Nitter might be down.")
+                return
+            latest = tweets[0]
+            send_message(chat_id, f"@{username} latest:\n\n{latest['text'][:500]}")
+            return
+
+        send_message(chat_id, "Unknown subcommand. Use: /src add|list|rm|scan|preview")
         return
 
     send_message(chat_id, "Unknown command. Send /h for help.")
