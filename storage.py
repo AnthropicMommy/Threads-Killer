@@ -250,44 +250,34 @@ def mark_tweet_posted(tweet_id, username):
 
 
 # --- X Scraper ---
-
-def _get_guest_token():
-    try:
-        resp = requests.post(
-            "https://api.twitter.com/1.1/guest/activate.json",
-            headers={"Authorization": "Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA"},
-            timeout=10,
-        )
-        resp.raise_for_status()
-        return resp.json().get("guest_token")
-    except Exception as e:
-        logger.error(f"Guest token failed: {e}")
-        return None
-
-
-def fetch_tweets_from_x(username):
-    guest_token = _get_guest_token()
-    if not guest_token:
-        return []
-
     try:
         resp = requests.get(
-            f"https://api.twitter.com/1.1/statuses/user_timeline.json?screen_name={username}&count=5&tweet_mode=extended",
-            headers={
-                "Authorization": "Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA",
-                "x-guest-token": guest_token,
-            },
-            timeout=10,
+            f"https://syndication.twitter.com/srv/timeline-profile/screen-name/{username}",
+            headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"},
+            timeout=15,
         )
         if resp.status_code != 200:
-            logger.warning(f"X API returned {resp.status_code} for @{username}")
+            logger.warning(f"Syndication returned {resp.status_code} for @{username}")
             return []
-        tweets = resp.json()
+
+        import re
+        match = re.search(r'__NEXT_DATA__[^>]*>(.*?)</script>', resp.text)
+        if not match:
+            logger.warning(f"No data found for @{username}")
+            return []
+
+        data = json.loads(match.group(1))
+        entries = data.get("props", {}).get("pageProps", {}).get("timeline", {}).get("entries", [])
+
         one_hour_ago = datetime.now(timezone.utc) - timedelta(hours=1)
         results = []
-        for tweet in tweets:
-            tweet_id = tweet.get("id_str", "")
+        for entry in entries:
+            content = entry.get("content", {})
+            tweet = content.get("tweet", {})
+            tweet_id = tweet.get("id_str", entry.get("sortIndex", "").split("/")[-1])
+            text = tweet.get("full_text", tweet.get("text", ""))
             created = tweet.get("created_at", "")
+
             if created:
                 try:
                     pub_dt = datetime.strptime(created, "%a %b %d %H:%M:%S %z %Z")
@@ -295,17 +285,20 @@ def fetch_tweets_from_x(username):
                         continue
                 except Exception:
                     pass
-            text = tweet.get("full_text", tweet.get("text", ""))
+
             text = re.sub(r'https?://\S+', '', text).strip()
-            if text and not was_tweet_posted(tweet_id):
+            text = unescape(text)
+
+            if text and tweet_id and not was_tweet_posted(tweet_id):
                 results.append({
                     "id": tweet_id,
                     "username": username,
                     "text": text,
                 })
+
         return results
     except Exception as e:
-        logger.error(f"X API fetch failed for @{username}: {e}")
+        logger.error(f"fetch_tweets_from_x failed for @{username}: {e}")
         return []
 
 
