@@ -13,6 +13,8 @@ from threads_api import publish_one
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+storage.init_db()
+
 ACCOUNTS = [
     {
         "id": "acc1",
@@ -67,6 +69,7 @@ def handle_telegram_update(update):
             send_message(chat_id, "Usage: /a <text>")
             return
         post_id = storage.add_post("acc1", post_text)
+        logger.info(f"GIST_ID_QUEUES={storage.GIST_ID_QUEUES[:8] if storage.GIST_ID_QUEUES else 'MISSING'}... GITHUB_TOKEN={'set' if storage.GITHUB_TOKEN else 'MISSING'}")
         send_message(chat_id, f"Added!\nID: {post_id}")
         return
 
@@ -149,6 +152,14 @@ def handle_telegram_update(update):
         else:
             storage.update_post_stats("acc1", post["id"], media_id=result)
             send_message(chat_id, f"Posted! ID: {post['id']}")
+        return
+
+    if cmd in ("/debug", "/d"):
+        gist_q = storage.GIST_ID_QUEUES[:8] if storage.GIST_ID_QUEUES else "MISSING"
+        gist_c = storage.GIST_ID_COOLDOWNS[:8] if storage.GIST_ID_COOLDOWNS else "MISSING"
+        token = "set" if storage.GITHUB_TOKEN else "MISSING"
+        posts = storage.get_queue("acc1")
+        send_message(chat_id, f"Gist Q: {gist_q}...\nGist C: {gist_c}...\nToken: {token}\nQueue: {len(posts)} posts")
         return
 
     send_message(chat_id, "Unknown command. Send /h for help.")
