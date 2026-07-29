@@ -299,7 +299,10 @@ def run_trigger():
     scan_result = storage.scan_and_queue("acc1")
     logger.info(f"Scan result: {scan_result}")
 
-    results = [f"Scan: {scan_result}"]
+    results = []
+
+    if "0 new" not in scan_result and "No X sources" not in scan_result:
+        results.append(f"X scan: {scan_result}")
 
     for account in ACCOUNTS:
         acc_id = account["id"]

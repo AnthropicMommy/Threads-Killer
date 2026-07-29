@@ -1,8 +1,8 @@
 import os
 import re
 import uuid
-import logging
 import json
+import logging
 import psycopg2
 import requests
 from datetime import datetime, timezone, timedelta
@@ -250,17 +250,18 @@ def mark_tweet_posted(tweet_id, username):
 
 
 # --- X Scraper ---
+
+def fetch_tweets_from_x(username):
     try:
         resp = requests.get(
             f"https://syndication.twitter.com/srv/timeline-profile/screen-name/{username}",
             headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"},
-            timeout=15,
+            timeout=20,
         )
         if resp.status_code != 200:
             logger.warning(f"Syndication returned {resp.status_code} for @{username}")
             return []
 
-        import re
         match = re.search(r'__NEXT_DATA__[^>]*>(.*?)</script>', resp.text)
         if not match:
             logger.warning(f"No data found for @{username}")
@@ -300,6 +301,28 @@ def mark_tweet_posted(tweet_id, username):
     except Exception as e:
         logger.error(f"fetch_tweets_from_x failed for @{username}: {e}")
         return []
+
+
+def scrape_tweet_url(url):
+    try:
+        resp = requests.get(
+            f"https://publish.twitter.com/oembed?url={url}",
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            return None
+        data = resp.json()
+        html = data.get("html", "")
+        match = re.search(r'<p[^>]*>(.*?)</p>', html)
+        if match:
+            text = unescape(re.sub(r'<[^>]+>', '', match.group(1))).strip()
+        else:
+            text = unescape(re.sub(r'<[^>]+>', '', html)).strip()
+            text = re.sub(r'—.*$', '', text).strip()
+        return text if text else None
+    except Exception as e:
+        logger.error(f"scrape_tweet_url failed: {e}")
+        return None
 
 
 def scan_and_queue(account_id="acc1"):
