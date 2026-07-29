@@ -43,6 +43,13 @@ Quick commands:
 
 
 def handle_telegram_update(update):
+    try:
+        _handle_update(update)
+    except Exception as e:
+        logger.error(f"Handler error: {e}", exc_info=True)
+
+
+def _handle_update(update):
     if "message" not in update:
         return
     message = update["message"]
@@ -64,12 +71,11 @@ def handle_telegram_update(update):
         if len(args) < 1:
             send_message(chat_id, "Usage: /a <text>")
             return
-        post_text = text.split(maxsplit=1)[1] if len(text.split(maxsplit=1)) > 1 else ""
+        post_text = " ".join(parts[1:])
         if not post_text:
             send_message(chat_id, "Usage: /a <text>")
             return
         post_id = storage.add_post("acc1", post_text)
-        logger.info(f"GIST_ID_QUEUES={storage.GIST_ID_QUEUES[:8] if storage.GIST_ID_QUEUES else 'MISSING'}... GITHUB_TOKEN={'set' if storage.GITHUB_TOKEN else 'MISSING'}")
         send_message(chat_id, f"Added!\nID: {post_id}")
         return
 
