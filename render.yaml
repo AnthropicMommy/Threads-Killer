@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: threads-killer-bot
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+      - key: THREADS_ACCESS_TOKEN_ACC1
+      - key: THREADS_USER_ID_ACC1
+      - key: DATABASE_PATH
+        value: threads_killer.db
