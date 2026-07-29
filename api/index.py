@@ -3,7 +3,6 @@ import os
 import sys
 import logging
 from http.server import BaseHTTPRequestHandler
-from urllib.parse import urlparse, parse_qs
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -26,6 +25,25 @@ ACCOUNTS = [
 ]
 
 
+HELP_TEXT = """Threads Killer Bot
+
+Quick commands:
+/a <text> - Add post to queue
+/al - List all posts
+/as - Show status
+/ac - Clear queue
+/ar <id> - Remove post
+/ae <id> <new text> - Edit post
+/p - Pause posting
+/r - Resume posting
+/h - This help
+
+Examples:
+/a Hello world this is my post
+/ar 7f638bd2
+/ae 7f638bd2 Updated text here"""
+
+
 def handle_telegram_update(update):
     if "message" not in update:
         return
@@ -40,135 +58,93 @@ def handle_telegram_update(update):
     cmd = parts[0].lower()
     args = parts[1:]
 
-    if cmd in ("/start", "/help"):
-        send_message(chat_id,
-            "Threads Killer Bot\n\n"
-            "Commands:\n"
-            "/add <acc> <text> - Add post\n"
-            "/edit <acc> <id> <text> - Edit post\n"
-            "/remove <acc> <id> - Remove post\n"
-            "/list <acc> - List queue\n"
-            "/status [acc] - Show status\n"
-            "/cooldown <acc|all> - Pause\n"
-            "/resume <acc|all> - Resume"
-        )
+    if cmd in ("/start", "/h", "/help"):
+        send_message(chat_id, HELP_TEXT)
         return
 
-    if cmd == "/add":
-        if len(args) < 2:
-            send_message(chat_id, "Usage: /add <acc> <text>")
+    if cmd in ("/a", "/add"):
+        if len(args) < 1:
+            send_message(chat_id, "Usage: /a <text>")
             return
-        acc_id = args[0].lower()
-        if acc_id not in ACCOUNT_IDS:
-            send_message(chat_id, f"Unknown: {acc_id}. Valid: {', '.join(ACCOUNT_IDS)}")
+        post_text = text.split(maxsplit=1)[1] if len(text.split(maxsplit=1)) > 1 else ""
+        if not post_text:
+            send_message(chat_id, "Usage: /a <text>")
             return
-        post_text = " ".join(args[1:])
-        post_id = storage.add_post(acc_id, post_text)
-        send_message(chat_id, f"Added to {acc_id}.\nID: {post_id}")
+        post_id = storage.add_post("acc1", post_text)
+        send_message(chat_id, f"Added!\nID: {post_id}")
         return
 
-    if cmd == "/edit":
-        if len(args) < 3:
-            send_message(chat_id, "Usage: /edit <acc> <id> <text>")
+    if cmd in ("/al", "/list"):
+        posts = storage.get_queue("acc1")
+        if not posts:
+            send_message(chat_id, "Queue empty.")
             return
-        acc_id = args[0].lower()
-        post_id = args[1]
-        new_text = " ".join(args[2:])
-        if storage.edit_post(acc_id, post_id, new_text):
-            send_message(chat_id, f"Updated {post_id} in {acc_id}.")
+        lines = [f"Queue ({len(posts)} posts):\n"]
+        for p in posts:
+            preview = p["text"][:80].replace("\n", " ")
+            lines.append(f"[{p['id']}] {preview}")
+        send_message(chat_id, "\n".join(lines))
+        return
+
+    if cmd in ("/as", "/status"):
+        posts = storage.get_queue("acc1")
+        paused = storage.is_paused("acc1")
+        state = "PAUSED" if paused else "ACTIVE"
+        lines = [
+            f"acc1 [{state}]",
+            f"  Queue: {len(posts)} posts",
+            f"  Posts loop every 15 min",
+        ]
+        send_message(chat_id, "\n".join(lines))
+        return
+
+    if cmd in ("/ar", "/rm", "/remove"):
+        if not args:
+            send_message(chat_id, "Usage: /ar <id>")
+            return
+        post_id = args[0]
+        if storage.remove_post("acc1", post_id):
+            send_message(chat_id, f"Removed {post_id}.")
         else:
             send_message(chat_id, f"Post {post_id} not found.")
         return
 
-    if cmd == "/remove":
+    if cmd in ("/ae", "/ed", "/edit"):
         if len(args) < 2:
-            send_message(chat_id, "Usage: /remove <acc> <id>")
+            send_message(chat_id, "Usage: /ae <id> <new text>")
             return
-        acc_id = args[0].lower()
-        post_id = args[1]
-        storage.remove_post(acc_id, post_id)
-        send_message(chat_id, f"Removed {post_id} from {acc_id}.")
-        return
-
-    if cmd == "/list":
-        if not args:
-            send_message(chat_id, "Usage: /list <acc>")
-            return
-        acc_id = args[0].lower()
-        if acc_id not in ACCOUNT_IDS:
-            send_message(chat_id, f"Unknown: {acc_id}")
-            return
-        posts = storage.get_queue(acc_id)
-        if not posts:
-            send_message(chat_id, f"{acc_id} queue empty.")
-            return
-        lines = [f"{acc_id} ({len(posts)} posts):\n"]
-        for p in posts:
-            preview = p["text"][:60].replace("\n", " ")
-            lines.append(f"[{p['id']}] ({p.get('times_posted', 0)}x) {preview}")
-        send_message(chat_id, "\n".join(lines))
-        return
-
-    if cmd == "/status":
-        acc_ids = ACCOUNT_IDS
-        if args and args[0].lower() in ACCOUNT_IDS:
-            acc_ids = [args[0].lower()]
-        elif args and args[0].lower() == "all":
-            acc_ids = ACCOUNT_IDS
-        lines = []
-        for acc_id in acc_ids:
-            account = ACCOUNT_MAP[acc_id]
-            posts = storage.get_queue(acc_id)
-            paused = storage.is_paused(acc_id)
-            state = "PAUSED" if paused else "ACTIVE"
-            hours = f"{account['active_start_hour_utc']}-{account['active_end_hour_utc']} UTC"
-            lines.append(
-                f"{acc_id} [{state}]\n"
-                f"  Queue: {len(posts)} posts\n"
-                f"  Active: {hours}\n"
-                f"  Burst: {account['posts_per_burst']} per 15min"
-            )
-        send_message(chat_id, "\n\n".join(lines))
-        return
-
-    if cmd == "/cooldown":
-        if not args:
-            send_message(chat_id, "Usage: /cooldown <acc|all>")
-            return
-        target = args[0].lower()
-        if target == "all":
-            storage.set_cooldown_all(True)
-            send_message(chat_id, "All accounts paused.")
-        elif target in ACCOUNT_IDS:
-            storage.set_cooldown(target, True)
-            send_message(chat_id, f"{target} paused.")
+        post_id = args[0]
+        new_text = " ".join(args[1:])
+        if storage.edit_post("acc1", post_id, new_text):
+            send_message(chat_id, f"Updated {post_id}.")
         else:
-            send_message(chat_id, f"Unknown: {target}")
+            send_message(chat_id, f"Post {post_id} not found.")
         return
 
-    if cmd == "/resume":
-        if not args:
-            send_message(chat_id, "Usage: /resume <acc|all>")
-            return
-        target = args[0].lower()
-        if target == "all":
-            storage.set_cooldown_all(False)
-            send_message(chat_id, "All accounts resumed.")
-        elif target in ACCOUNT_IDS:
-            storage.set_cooldown(target, False)
-            send_message(chat_id, f"{target} resumed.")
-        else:
-            send_message(chat_id, f"Unknown: {target}")
+    if cmd in ("/ac", "/clear"):
+        storage.clear_queue("acc1")
+        send_message(chat_id, "Queue cleared.")
         return
 
-    send_message(chat_id, "Unknown command. Send /help for commands.")
+    if cmd in ("/p", "/pause"):
+        storage.set_cooldown("acc1", True)
+        send_message(chat_id, "Posting paused.")
+        return
+
+    if cmd in ("/r", "/resume"):
+        storage.set_cooldown("acc1", False)
+        send_message(chat_id, "Posting resumed.")
+        return
+
+    send_message(chat_id, "Unknown command. Send /h for help.")
 
 
 def send_message(chat_id, text):
     import requests
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     try:
-        requests.post(url, json={"chat_id": chat_id, "text": text})
+        resp = requests.post(url, json={"chat_id": chat_id, "text": text}, timeout=10)
+        logger.info(f"Send message to {chat_id}: status={resp.status_code}")
     except Exception as e:
         logger.error(f"Failed to send message: {e}")
 
@@ -179,22 +155,22 @@ def run_trigger():
     for account in ACCOUNTS:
         acc_id = account["id"]
         if storage.is_paused(acc_id):
-            results.append(f"[{acc_id}] paused, skip")
+            results.append(f"[{acc_id}] paused")
             continue
         now = datetime.now(timezone.utc)
         start = account.get("active_start_hour_utc", 0)
         end = account.get("active_end_hour_utc", 24)
         if not (start <= now.hour < end):
-            results.append(f"[{acc_id}] outside window, skip")
+            results.append(f"[{acc_id}] outside window ({start}-{end} UTC)")
             continue
         post = storage.get_next_post(acc_id)
         if not post:
-            results.append(f"[{acc_id}] queue empty, skip")
+            results.append(f"[{acc_id}] queue empty")
             continue
         result = publish_one(acc_id, post)
         if isinstance(result, tuple) and result[0] is None:
             storage.update_post_stats(acc_id, post["id"], error=result[1])
-            results.append(f"[{acc_id}] FAILED: {result[1]}")
+            results.append(f"[{acc_id}] FAILED: {result[1][:100]}")
         else:
             storage.update_post_stats(acc_id, post["id"], media_id=result)
             results.append(f"[{acc_id}] posted: {post['text'][:40]}...")
@@ -213,23 +189,28 @@ class handler(BaseHTTPRequestHandler):
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()
-                self.wfile.write(b'{"ok": true}')
+                self.wfile.write(b'{"ok":true}')
             except Exception as e:
                 logger.error(f"Webhook error: {e}")
                 self.send_response(500)
                 self.end_headers()
         elif self.path == "/api/trigger":
-            result = run_trigger()
-            self.send_response(200)
-            self.send_header("Content-Type", "text/plain")
-            self.end_headers()
-            self.wfile.write(result.encode())
+            try:
+                result = run_trigger()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain")
+                self.end_headers()
+                self.wfile.write(result.encode())
+            except Exception as e:
+                logger.error(f"Trigger error: {e}")
+                self.send_response(500)
+                self.end_headers()
         else:
             self.send_response(404)
             self.end_headers()
 
     def do_GET(self):
-        if self.path == "/api/health" or self.path == "/health":
+        if self.path in ("/api/health", "/health"):
             self.send_response(200)
             self.send_header("Content-Type", "text/plain")
             self.end_headers()

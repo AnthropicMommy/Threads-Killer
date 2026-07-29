@@ -1,13 +1,15 @@
 import os
 import json
+import uuid
+import logging
 import requests
+from datetime import datetime, timezone
+
+logger = logging.getLogger(__name__)
 
 GIST_ID_QUEUES = os.environ.get("GIST_ID_QUEUES", "")
 GIST_ID_COOLDOWNS = os.environ.get("GIST_ID_COOLDOWNS", "")
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
-QUEUE_FILENAME = "queues.json"
-COOLDOWNS_FILENAME = "gistfile1.txt"
-
 GITHUB_API = "https://api.github.com"
 
 
@@ -18,59 +20,57 @@ def _headers():
     }
 
 
-def _get_gist_id(filename):
-    if filename == QUEUE_FILENAME:
-        return GIST_ID_QUEUES
-    return GIST_ID_COOLDOWNS
-
-
-def _load_file(filename):
-    gist_id = _get_gist_id(filename)
+def _read_gist(gist_id):
     if not gist_id or not GITHUB_TOKEN:
+        logger.error("Missing GIST_ID or GITHUB_TOKEN")
         return {}
     try:
-        resp = requests.get(f"{GITHUB_API}/gists/{gist_id}", headers=_headers())
+        resp = requests.get(f"{GITHUB_API}/gists/{gist_id}", headers=_headers(), timeout=10)
+        logger.info(f"Read gist {gist_id}: status={resp.status_code}")
         resp.raise_for_status()
         files = resp.json().get("files", {})
-        for f in files.values():
-            return json.loads(f["content"])
+        for fname, fdata in files.items():
+            content = fdata.get("content", "{}")
+            logger.info(f"  File: {fname}, content length: {len(content)}")
+            return json.loads(content)
         return {}
-    except Exception:
+    except Exception as e:
+        logger.error(f"Failed to read gist {gist_id}: {e}")
         return {}
 
 
-def _save_file(filename, data):
-    gist_id = _get_gist_id(filename)
+def _write_gist(gist_id, filename, data):
     if not gist_id or not GITHUB_TOKEN:
+        logger.error("Missing GIST_ID or GITHUB_TOKEN for write")
         return False
     try:
-        target_filename = QUEUE_FILENAME if filename == QUEUE_FILENAME else "gistfile1.txt"
+        content = json.dumps(data, indent=2)
         resp = requests.patch(
             f"{GITHUB_API}/gists/{gist_id}",
             headers=_headers(),
-            json={"files": {target_filename: {"content": json.dumps(data, indent=2)}}},
+            json={"files": {filename: {"content": content}}},
+            timeout=10,
         )
+        logger.info(f"Write gist {gist_id} file={filename}: status={resp.status_code}")
         resp.raise_for_status()
         return True
-    except Exception:
+    except Exception as e:
+        logger.error(f"Failed to write gist {gist_id}: {e}")
         return False
 
 
 def get_queue(account_id):
-    queues = _load_file(QUEUE_FILENAME)
+    queues = _read_gist(GIST_ID_QUEUES)
     return queues.get(account_id, [])
 
 
 def save_queue(account_id, posts):
-    queues = _load_file(QUEUE_FILENAME)
+    queues = _read_gist(GIST_ID_QUEUES)
     queues[account_id] = posts
-    _save_file(QUEUE_FILENAME, queues)
+    return _write_gist(GIST_ID_QUEUES, "queues.json", queues)
 
 
 def add_post(account_id, text):
-    import uuid
-    from datetime import datetime, timezone
-
     posts = get_queue(account_id)
     post_id = uuid.uuid4().hex[:8]
     post = {
@@ -83,7 +83,8 @@ def add_post(account_id, text):
         "last_error": None,
     }
     posts.append(post)
-    save_queue(account_id, posts)
+    ok = save_queue(account_id, posts)
+    logger.info(f"add_post({account_id}): saved={ok}, total={len(posts)}")
     return post_id
 
 
@@ -99,9 +100,13 @@ def edit_post(account_id, post_id, new_text):
 
 def remove_post(account_id, post_id):
     posts = get_queue(account_id)
-    posts = [p for p in posts if p["id"] != post_id]
-    save_queue(account_id, posts)
-    return True
+    new_posts = [p for p in posts if p["id"] != post_id]
+    save_queue(account_id, new_posts)
+    return len(new_posts) < len(posts)
+
+
+def clear_queue(account_id):
+    save_queue(account_id, [])
 
 
 def get_next_post(account_id):
@@ -113,17 +118,16 @@ def get_next_post(account_id):
 
 
 def update_post_stats(account_id, post_id, media_id=None, error=None):
-    from datetime import datetime, timezone
-
     posts = get_queue(account_id)
     for p in posts:
         if p["id"] == post_id:
+            now = datetime.now(timezone.utc).isoformat()
             if error:
                 p["last_error"] = error
-                p["last_posted_at"] = datetime.now(timezone.utc).isoformat()
+                p["last_posted_at"] = now
             else:
                 p["times_posted"] = p.get("times_posted", 0) + 1
-                p["last_posted_at"] = datetime.now(timezone.utc).isoformat()
+                p["last_posted_at"] = now
                 p["last_media_id"] = media_id
                 p["last_error"] = None
             break
@@ -131,13 +135,13 @@ def update_post_stats(account_id, post_id, media_id=None, error=None):
 
 
 def get_cooldowns():
-    return _load_file(COOLDOWNS_FILENAME)
+    return _read_gist(GIST_ID_COOLDOWNS)
 
 
 def set_cooldown(account_id, paused):
     cooldowns = get_cooldowns()
     cooldowns[account_id] = paused
-    _save_file(COOLDOWNS_FILENAME, cooldowns)
+    _write_gist(GIST_ID_COOLDOWNS, "gistfile1.txt", cooldowns)
 
 
 def is_paused(account_id):
@@ -147,7 +151,5 @@ def is_paused(account_id):
 
 def set_cooldown_all(paused):
     from config import ACCOUNT_IDS
-    cooldowns = {}
-    for acc_id in ACCOUNT_IDS:
-        cooldowns[acc_id] = paused
-    _save_file(COOLDOWNS_FILENAME, cooldowns)
+    cooldowns = {acc_id: paused for acc_id in ACCOUNT_IDS}
+    _write_gist(GIST_ID_COOLDOWNS, "gistfile1.txt", cooldowns)
