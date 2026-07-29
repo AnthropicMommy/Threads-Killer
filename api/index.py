@@ -26,19 +26,25 @@ ACCOUNTS = [
     },
 ]
 
-
 HELP_TEXT = """Threads Killer Bot
 
-Quick commands:
+Queue:
 /a <text> - Add post
 /al - List posts
 /as - Status
 /ac - Clear queue
-/ar <id> - Remove post
-/ae <id> <new text> - Edit post
+/ar <id> - Remove
+/ae <id> <text> - Edit
 /go - Post now
 /p - Pause
 /r - Resume
+
+X Cross-poster:
+/src add <username> - Monitor X profile
+/src list - List sources
+/src rm <username> - Remove source
+/src scan - Scan now
+
 /h - Help"""
 
 
@@ -63,10 +69,12 @@ def _handle_update(update):
     cmd = parts[0].lower()
     args = parts[1:]
 
+    # --- Help ---
     if cmd in ("/start", "/h", "/help"):
         send_message(chat_id, HELP_TEXT)
         return
 
+    # --- Add post ---
     if cmd in ("/a", "/add"):
         if len(args) < 1:
             send_message(chat_id, "Usage: /a <text>")
@@ -79,6 +87,7 @@ def _handle_update(update):
         send_message(chat_id, f"Added!\nID: {post_id}")
         return
 
+    # --- List posts ---
     if cmd in ("/al", "/list"):
         posts = storage.get_queue("acc1")
         if not posts:
@@ -91,18 +100,21 @@ def _handle_update(update):
         send_message(chat_id, "\n".join(lines))
         return
 
+    # --- Status ---
     if cmd in ("/as", "/status"):
         posts = storage.get_queue("acc1")
         paused = storage.is_paused("acc1")
         state = "PAUSED" if paused else "ACTIVE"
+        sources = storage.get_sources()
         lines = [
             f"acc1 [{state}]",
             f"  Queue: {len(posts)} posts",
-            f"  Posts loop every 15 min",
+            f"  X sources: {len(sources)}",
         ]
         send_message(chat_id, "\n".join(lines))
         return
 
+    # --- Remove post ---
     if cmd in ("/ar", "/rm", "/remove"):
         if not args:
             send_message(chat_id, "Usage: /ar <id>")
@@ -114,6 +126,7 @@ def _handle_update(update):
             send_message(chat_id, f"Post {post_id} not found.")
         return
 
+    # --- Edit post ---
     if cmd in ("/ae", "/ed", "/edit"):
         if len(args) < 2:
             send_message(chat_id, "Usage: /ae <id> <new text>")
@@ -126,21 +139,25 @@ def _handle_update(update):
             send_message(chat_id, f"Post {post_id} not found.")
         return
 
+    # --- Clear queue ---
     if cmd in ("/ac", "/clear"):
         storage.clear_queue("acc1")
         send_message(chat_id, "Queue cleared.")
         return
 
+    # --- Pause ---
     if cmd in ("/p", "/pause"):
         storage.set_cooldown("acc1", True)
         send_message(chat_id, "Posting paused.")
         return
 
+    # --- Resume ---
     if cmd in ("/r", "/resume"):
         storage.set_cooldown("acc1", False)
         send_message(chat_id, "Posting resumed.")
         return
 
+    # --- Post now ---
     if cmd in ("/go", "/post", "/now"):
         posts = storage.get_queue("acc1")
         if not posts:
@@ -160,12 +177,51 @@ def _handle_update(update):
             send_message(chat_id, f"Posted! ID: {post['id']}")
         return
 
-    if cmd in ("/debug", "/d"):
-        gist_q = storage.GIST_ID_QUEUES[:8] if storage.GIST_ID_QUEUES else "MISSING"
-        gist_c = storage.GIST_ID_COOLDOWNS[:8] if storage.GIST_ID_COOLDOWNS else "MISSING"
-        token = "set" if storage.GITHUB_TOKEN else "MISSING"
-        posts = storage.get_queue("acc1")
-        send_message(chat_id, f"Gist Q: {gist_q}...\nGist C: {gist_c}...\nToken: {token}\nQueue: {len(posts)} posts")
+    # --- X Sources ---
+    if cmd == "/src":
+        if not args:
+            send_message(chat_id, "Usage: /src add|list|rm|scan <username>")
+            return
+        sub = args[0].lower()
+
+        if sub == "add":
+            if len(args) < 2:
+                send_message(chat_id, "Usage: /src add <x_username>")
+                return
+            username = args[1].lstrip("@")
+            storage.add_source(username)
+            send_message(chat_id, f"Monitoring @{username}")
+            return
+
+        if sub == "list":
+            sources = storage.get_sources()
+            if not sources:
+                send_message(chat_id, "No X sources.")
+                return
+            lines = [f"X Sources ({len(sources)}):\n"]
+            for s in sources:
+                lines.append(f"@{s}")
+            send_message(chat_id, "\n".join(lines))
+            return
+
+        if sub in ("rm", "remove"):
+            if len(args) < 2:
+                send_message(chat_id, "Usage: /src rm <username>")
+                return
+            username = args[1].lstrip("@")
+            if storage.remove_source(username):
+                send_message(chat_id, f"Removed @{username}")
+            else:
+                send_message(chat_id, f"@{username} not found.")
+            return
+
+        if sub == "scan":
+            send_message(chat_id, "Scanning X profiles...")
+            result = storage.scan_and_queue("acc1")
+            send_message(chat_id, result)
+            return
+
+        send_message(chat_id, "Unknown subcommand. Use: /src add|list|rm|scan")
         return
 
     send_message(chat_id, "Unknown command. Send /h for help.")
@@ -183,7 +239,12 @@ def send_message(chat_id, text):
 
 def run_trigger():
     from datetime import datetime, timezone
-    results = []
+
+    scan_result = storage.scan_and_queue("acc1")
+    logger.info(f"Scan result: {scan_result}")
+
+    results = [f"Scan: {scan_result}"]
+
     for account in ACCOUNTS:
         acc_id = account["id"]
         if storage.is_paused(acc_id):
@@ -206,7 +267,7 @@ def run_trigger():
         else:
             storage.update_post_stats(acc_id, post["id"], media_id=result)
             results.append(f"[{acc_id}] posted: {post['text'][:40]}...")
-    return "\n".join(results) if results else "Nothing to post"
+    return "\n".join(results) if results else "Nothing to do"
 
 
 class handler(BaseHTTPRequestHandler):

@@ -1,12 +1,22 @@
 import os
+import re
 import uuid
 import logging
+import feedparser
 import psycopg2
-from datetime import datetime, timezone
+import requests
+from datetime import datetime, timezone, timedelta
 
 logger = logging.getLogger(__name__)
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
+
+NITTER_INSTANCES = [
+    "https://nitter.privacydev.net",
+    "https://nitter.poast.org",
+    "https://nitter.cz",
+    "https://nitter.woodland.cafe",
+]
 
 _conn = None
 
@@ -41,11 +51,27 @@ def init_db():
                 is_paused INTEGER DEFAULT 0
             )
         """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS x_sources (
+                id TEXT PRIMARY KEY,
+                username TEXT NOT NULL UNIQUE,
+                added_at TEXT NOT NULL
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS x_posted (
+                tweet_id TEXT PRIMARY KEY,
+                username TEXT NOT NULL,
+                posted_at TEXT NOT NULL
+            )
+        """)
         cur.execute("INSERT INTO cooldowns (account_id, is_paused) VALUES ('acc1', 0) ON CONFLICT DO NOTHING")
         logger.info("Database initialized")
     except Exception as e:
         logger.error(f"init_db failed: {e}")
 
+
+# --- Post management ---
 
 def add_post(account_id, text):
     post_id = uuid.uuid4().hex[:8]
@@ -57,7 +83,6 @@ def add_post(account_id, text):
             "INSERT INTO posts (id, account_id, text, added_at) VALUES (%s, %s, %s, %s)",
             (post_id, account_id, text, now),
         )
-        logger.info(f"add_post({account_id}): id={post_id}")
         return post_id
     except Exception as e:
         logger.error(f"add_post failed: {e}")
@@ -162,3 +187,140 @@ def set_cooldown_all(paused):
         cur.execute("UPDATE cooldowns SET is_paused = %s", (1 if paused else 0,))
     except Exception as e:
         logger.error(f"set_cooldown_all failed: {e}")
+
+
+# --- X Source management ---
+
+def add_source(username):
+    username = username.lstrip("@").strip()
+    source_id = uuid.uuid4().hex[:8]
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        conn = _get_conn()
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO x_sources (id, username, added_at) VALUES (%s, %s, %s) ON CONFLICT (username) DO NOTHING",
+            (source_id, username, now),
+        )
+        return True
+    except Exception as e:
+        logger.error(f"add_source failed: {e}")
+        return False
+
+
+def remove_source(username):
+    username = username.lstrip("@").strip()
+    try:
+        conn = _get_conn()
+        cur = conn.cursor()
+        cur.execute("DELETE FROM x_sources WHERE username = %s", (username,))
+        return cur.rowcount > 0
+    except Exception as e:
+        logger.error(f"remove_source failed: {e}")
+        return False
+
+
+def get_sources():
+    try:
+        conn = _get_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT username FROM x_sources ORDER BY added_at ASC")
+        return [row[0] for row in cur.fetchall()]
+    except Exception as e:
+        logger.error(f"get_sources failed: {e}")
+        return []
+
+
+def was_tweet_posted(tweet_id):
+    try:
+        conn = _get_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT 1 FROM x_posted WHERE tweet_id = %s", (tweet_id,))
+        return cur.fetchone() is not None
+    except Exception as e:
+        logger.error(f"was_tweet_posted failed: {e}")
+        return False
+
+
+def mark_tweet_posted(tweet_id, username):
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        conn = _get_conn()
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO x_posted (tweet_id, username, posted_at) VALUES (%s, %s, %s) ON CONFLICT DO NOTHING",
+            (tweet_id, username, now),
+        )
+    except Exception as e:
+        logger.error(f"mark_tweet_posted failed: {e}")
+
+
+# --- X Scraper ---
+
+def _clean_tweet_text(text):
+    text = re.sub(r'<[^>]+>', '', text)
+    text = re.sub(r'&amp;', '&', text)
+    text = re.sub(r'&lt;', '<', text)
+    text = re.sub(r'&gt;', '>', text)
+    text = re.sub(r'&#\d+;', '', text)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text.strip()
+
+
+def fetch_tweets_from_x(username):
+    for instance in NITTER_INSTANCES:
+        url = f"{instance}/{username}/rss"
+        try:
+            resp = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+            if resp.status_code != 200:
+                continue
+            feed = feedparser.parse(resp.text)
+            if not feed.entries:
+                continue
+            tweets = []
+            one_hour_ago = datetime.now(timezone.utc) - timedelta(hours=1)
+            for entry in feed.entries:
+                tweet_id = entry.get("id", "").split("/")[-1] if entry.get("id") else entry.get("link", "").split("/")[-1]
+                if not tweet_id:
+                    tweet_id = entry.get("link", "").split("/")[-1]
+                published = entry.get("published_parsed")
+                if published:
+                    pub_dt = datetime(*published[:6], tzinfo=timezone.utc)
+                    if pub_dt < one_hour_ago:
+                        continue
+                text = _clean_tweet_text(entry.get("title", "") or entry.get("summary", ""))
+                if text and not was_tweet_posted(tweet_id):
+                    tweets.append({
+                        "id": tweet_id,
+                        "username": username,
+                        "text": text,
+                        "link": entry.get("link", ""),
+                    })
+            if tweets:
+                return tweets
+        except Exception as e:
+            logger.warning(f"Nitter {instance} failed for {username}: {e}")
+            continue
+    return []
+
+
+def scan_and_queue(account_id="acc1"):
+    sources = get_sources()
+    if not sources:
+        return "No X sources configured."
+
+    results = []
+    total_new = 0
+    for username in sources:
+        tweets = fetch_tweets_from_x(username)
+        for tweet in tweets:
+            post_id = add_post(account_id, tweet["text"])
+            mark_tweet_posted(tweet["id"], username)
+            total_new += 1
+        if tweets:
+            results.append(f"@{username}: {len(tweets)} new")
+        else:
+            results.append(f"@{username}: no new posts")
+
+    summary = f"Found {total_new} new posts.\n" + "\n".join(results)
+    return summary
